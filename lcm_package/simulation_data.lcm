@@ -1,0 +1,40 @@
+package data;
+
+struct SimCommand 
+{
+    double timestamp;
+
+    int32_t num_ranges;
+    double joint_position[num_ranges];
+    double joint_velocity[num_ranges];
+    double joint_feed_forward_torque[num_ranges];
+    double joint_stiffness[num_ranges];
+    double joint_damping[num_ranges];
+}
+
+struct SimState 
+{
+    double timestamp;
+
+    int32_t num_ranges;
+    double joint_position[num_ranges];
+    double joint_velocity[num_ranges];
+    double joint_torque[num_ranges];
+
+    double base_link_position[3];
+    double base_link_linear_velocity[3];
+    double base_link_quaternion[4];
+    double base_link_angular_velocity[3];
+
+    double imu_link_position[3];
+    double imu_link_linear_velocity[3];
+    double imu_link_quaternion[4];
+    double imu_link_angular_velocity[3];
+
+    double imu_sensor_quaternion[4];
+    double imu_sensor_linear_acceleration[3];
+    double imu_sensor_angular_velocity[3];
+
+    int32_t num_contact_ranges;
+    double contact_force[num_contact_ranges];
+}
