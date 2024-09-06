@@ -26,6 +26,7 @@ class MujocoSimulator:
         self.first_run_mujoco_step = True
         # parameters for simulation control
         self.sim_time = 0
+        self.qpos_cmd=[0]*6
 
 
     def resetSim(self):
@@ -66,7 +67,7 @@ class MujocoSimulator:
         self.cam.distance = 2
         self.cam.lookat = np.array([0.0, 0.0, 0])
         # print(self.data.qpos)
-        self.data.qpos[0:12] = self.default_joint_pos.copy()
+        self.data.qpos[0:6] = self.default_joint_pos.copy()
         
         # Init GLFW library, create window, make OpenGL context current, request v-sync
         glfw.init()
@@ -85,7 +86,7 @@ class MujocoSimulator:
             print('cam.lookat =np.array([', self.cam.lookat[0], ',',
                   self.cam.lookat[1], ',', self.cam.lookat[2], '])')
         for i in range(6):
-            self.setPostionServo( i, 200)
+            self.setPostionServo(i, 200)
         total_mass = sum(self.model.body_mass[1:14])
         print("total mass:", total_mass)
         # self.setVelocityServo(4, 10)
@@ -98,14 +99,9 @@ class MujocoSimulator:
         #
 
     def controller(self, model, data):
-        cmd = self.command
-        for i in range(12):
-            if (self.fix_base):
-                self.data.ctrl[i] = cmd.joint_stiffness[i]*(cmd.joint_position[i]-self.data.qpos[i])+cmd.joint_damping[i]*(
-                    cmd.joint_velocity[i]-self.data.qvel[i])+cmd.joint_feed_forward_torque[i]
-            else:
-                self.data.ctrl[i] = cmd.joint_stiffness[i]*(cmd.joint_position[i]-self.data.qpos[7+i])+cmd.joint_damping[i]*(
-                    cmd.joint_velocity[i]-self.data.qvel[6+i])+cmd.joint_feed_forward_torque[i]
+        self.qpos_cmd[0]=0.5
+        self.data.ctrl =  self.qpos_cmd.copy()
+
 
     def simulationStep(self):
         if self.first_run_mujoco_step:
@@ -121,6 +117,29 @@ class MujocoSimulator:
             
         # publish data through lcm
         # self.lc.publish("simulator_state", self.state.encode())
+    def inverseKinematics(self):
+        pass
+      # 2. 调用MuJoCo库求雅可比矩阵
+    # End-effector position
+    # ee_pos = self.data.sensordata[:3]
+    # jacp = np.zeros((3, 2))
+    # mj.mj_jac(self.model, self.data, jacp, None, ee_pos, 2)
+    # J = jacp[[0, 2], :]
+    # delta_pos = np.array([[cart_pos[0] - ee_pos[0]],
+    #                       [cart_pos[1] - ee_pos[2]]])
+    
+    # 这里采用自己撸代码的方式，大家可以尝试对比一下误差
+    # ee_pos = [self.data.sensordata[0], self.data.sensordata[2]]
+    # sinq1, cosq1 = math.sin(self.data.qpos[0]), math.cos(self.data.qpos[0])
+    # sinq12, cosq12 = math.sin(self.data.qpos[0] + self.data.qpos[1]), math.cos(self.data.qpos[0] + self.data.qpos[1])
+    # l1, l2 = 1, 1
+    # J = np.array([[-l1 * sinq1 - l2 * sinq12, -l2 * sinq12],
+    #               [l1 * cosq1 + l2 * cosq12,  l2 * cosq12]])
+    # delta_pos = np.array([[cart_pos[0] - ee_pos[0]],
+    #                       [cart_pos[1] - ee_pos[1]]])
+    # dq = np.linalg.pinv(J) @ delta_pos
+    # return np.array([[self.data.qpos[0] + dq[0, 0]],
+    #                  [self.data.qpos[1] + dq[1, 0]]])
         
     def runSimulation(self):
         # key and mouse control
@@ -137,7 +156,7 @@ class MujocoSimulator:
             viewport_width, viewport_height = glfw.get_framebuffer_size(self.window)
             viewport = mj.MjrRect(0, 0, viewport_width, viewport_height)
         # Update scene and render
-            self.cam.lookat = np.array([0, 0, 1.2])
+            self.cam.lookat = np.array([0, 0, 0.5])
             self.opt.flags[14] = 1  # show contact area
             self.opt.flags[15] = 1  # show contact force
             mj.mjv_updateScene(self.model, self.data, self.opt, None,
@@ -148,6 +167,7 @@ class MujocoSimulator:
         # process pending GUI events, call GLFW callbacks
             glfw.poll_events()
             while (self.data.time-time_prev < 1.0/60.0):
+                self.controller(self.model, self.data)
                 mj.mj_step(self.model, self.data)
                 time.sleep(0.0002)
         glfw.terminate()
