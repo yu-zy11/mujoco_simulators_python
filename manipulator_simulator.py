@@ -7,15 +7,17 @@ import time
 import math
 import threading
 from scipy.spatial.transform import Rotation as R
+from inverse_kinematics import pinocchio_kinematics as Kine
+from trajectory import trapezoid_planning, PlotPositionAndVelocity
 # from ros_pub import RosPublisher
 # import rospy
 
 
 class MujocoSimulator:
-    def __init__(self, model_file) -> None:
+    def __init__(self, xml_file,urdf_file) -> None:
         self.display_state_estimator = False
         self.fix_base = 1
-        self.xml_path = model_file
+        self.xml_path = xml_file
         self.default_joint_pos = [0]*6
         self.print_camera_config = 1
         self.button_left = False
@@ -27,6 +29,23 @@ class MujocoSimulator:
         # parameters for simulation control
         self.sim_time = 0
         self.qpos_cmd=[0]*6
+        self.qvel_cmd=[0]*6
+        self.kp=[500,1000,200,50,20,10]
+        self.kd=[50,200,20,20,20,10]
+        self.kine=Kine(urdf_file)
+        # parameters for trajectory
+        self.max_vel=1.0
+        self.max_acc=2.0
+        
+        self.pos_array=np.array([[-280,  336,   673, 673, 1739, 1739, 1739,  2674, 2674, 3403, 3628, 3628, 3628],
+                                 [-221, -221,  -147,-147,-147, -147, -147,  -147, -147, -147, -388, -344, -344],
+                                 [834.7 ,834.7, 700, 453, 807,  453,  117.6, 807,  658,  410,  1352, 954,  477]]).dot(0.001)
+        #set base position and orietation
+        self.base_pos = np.array([0, 0, -0.4])
+        self.base_ori=np.array([[1, 0, 0],
+                                [0, 1, 0],
+                                [0, 0, 1]])
+        
 
 
     def resetSim(self):
@@ -64,8 +83,8 @@ class MujocoSimulator:
         # set camera configuration
         self.cam.azimuth = 90
         self.cam.elevation = -45
-        self.cam.distance = 2
-        self.cam.lookat = np.array([0.0, 0.0, 0])
+        self.cam.distance = 3
+        self.cam.lookat = np.array([0.0, 0.0, 0.5])
         # print(self.data.qpos)
         self.data.qpos[0:6] = self.default_joint_pos.copy()
         
@@ -85,8 +104,8 @@ class MujocoSimulator:
                   self.cam.elevation, ';', 'cam.distance = ', self.cam.distance)
             print('cam.lookat =np.array([', self.cam.lookat[0], ',',
                   self.cam.lookat[1], ',', self.cam.lookat[2], '])')
-        for i in range(6):
-            self.setPostionServo(i, 200)
+        # for i in range(6):
+        #     self.setPostionServo(i, 200)
         total_mass = sum(self.model.body_mass[1:14])
         print("total mass:", total_mass)
         # self.setVelocityServo(4, 10)
@@ -99,47 +118,13 @@ class MujocoSimulator:
         #
 
     def controller(self, model, data):
-        self.qpos_cmd[0]=0.5
-        self.data.ctrl =  self.qpos_cmd.copy()
-
-
-    def simulationStep(self):
-        if self.first_run_mujoco_step:
-            mj.set_mjcb_control(self.controller)
+        if(self.first_run_mujoco_step):
+            self.data.qpos=self.qpos_cmd
+            mj.mj_forward(self.model, self.data)
             self.first_run_mujoco_step = False
-        self.sim_time = time.time()
-        mj.mj_step(self.model, self.data)
-        self.updateState()
-        
-        # display state estimator
-        if self.display_state_estimator:
-            self.displayStateEstimator()
-            
-        # publish data through lcm
-        # self.lc.publish("simulator_state", self.state.encode())
-    def inverseKinematics(self):
-        pass
-      # 2. 调用MuJoCo库求雅可比矩阵
-    # End-effector position
-    # ee_pos = self.data.sensordata[:3]
-    # jacp = np.zeros((3, 2))
-    # mj.mj_jac(self.model, self.data, jacp, None, ee_pos, 2)
-    # J = jacp[[0, 2], :]
-    # delta_pos = np.array([[cart_pos[0] - ee_pos[0]],
-    #                       [cart_pos[1] - ee_pos[2]]])
-    
-    # 这里采用自己撸代码的方式，大家可以尝试对比一下误差
-    # ee_pos = [self.data.sensordata[0], self.data.sensordata[2]]
-    # sinq1, cosq1 = math.sin(self.data.qpos[0]), math.cos(self.data.qpos[0])
-    # sinq12, cosq12 = math.sin(self.data.qpos[0] + self.data.qpos[1]), math.cos(self.data.qpos[0] + self.data.qpos[1])
-    # l1, l2 = 1, 1
-    # J = np.array([[-l1 * sinq1 - l2 * sinq12, -l2 * sinq12],
-    #               [l1 * cosq1 + l2 * cosq12,  l2 * cosq12]])
-    # delta_pos = np.array([[cart_pos[0] - ee_pos[0]],
-    #                       [cart_pos[1] - ee_pos[1]]])
-    # dq = np.linalg.pinv(J) @ delta_pos
-    # return np.array([[self.data.qpos[0] + dq[0, 0]],
-    #                  [self.data.qpos[1] + dq[1, 0]]])
+        for i in range(6):
+            self.data.ctrl[i]=self.kp[i]*(self.qpos_cmd[i]-self.data.qpos[i])+self.kd[i]*(self.qvel_cmd[i]-self.data.qvel[i])
+
         
     def runSimulation(self):
         # key and mouse control
@@ -150,13 +135,16 @@ class MujocoSimulator:
         mj.mj_forward(self.model, self.data)
 
         # counter=0
+        start_time=self.data.time
+        itr=0
         while not glfw.window_should_close(self.window):
             # mj.mj_forward(self.model, self.data)
             time_prev = self.data.time
             viewport_width, viewport_height = glfw.get_framebuffer_size(self.window)
             viewport = mj.MjrRect(0, 0, viewport_width, viewport_height)
         # Update scene and render
-            self.cam.lookat = np.array([0, 0, 0.5])
+            self.cam.lookat = np.array([0, 0, 0.8])
+            self.cam.distance = 3
             self.opt.flags[14] = 1  # show contact area
             self.opt.flags[15] = 1  # show contact force
             mj.mjv_updateScene(self.model, self.data, self.opt, None,
@@ -167,34 +155,19 @@ class MujocoSimulator:
         # process pending GUI events, call GLFW callbacks
             glfw.poll_events()
             while (self.data.time-time_prev < 1.0/60.0):
+                start_pos=self.base_ori.T@(self.pos_array[:,0]-self.base_pos)
+                end_pos=self.base_ori.T@(self.pos_array[:,1]-self.base_pos)
+                t=itr*0.002
+                cart_pos,cart_vel=trapezoid_planning(start_pos,end_pos,self.max_vel, self.max_acc, t)
+                qref=self.data.qpos
+                omega_des=np.zeros(3)
+                rotm=np.eye(3)
+                self.qpos_cmd,self.qvel_cmd=self.kine.ikine(qref,cart_pos,rotm,cart_vel,omega_des)
                 self.controller(self.model, self.data)
                 mj.mj_step(self.model, self.data)
-                time.sleep(0.0002)
+                time.sleep(0.002)
+        itr+=1
         glfw.terminate()
-
-    def updateState(self):
-        # imu
-        self.state.num_ranges=12
-        self.state.imu_sensor_linear_acceleration = self.data.sensordata[7:10]  # include gravity 9.81
-        self.state.imu_sensor_angular_velocity = self.data.sensordata[4:7]
-        self.state.imu_sensor_quaternion = [self.data.sensordata[0], self.data.sensordata[1],
-                               self.data.sensordata[2], self.data.sensordata[3]]
-        # encoder
-        if self.fix_base:
-            self.state.joint_position =self.data.qpos[0:12]
-            self.state.joint_velocity = self.data.qvel[0:12]
-            self.state.joint_torque=self.data.qfrc_actuator[0:12]
-            self.state.base_link_position = [0, 0, 0.8]
-            self.state.base_link_linear_velocity = [0, 0, 0]
-        else:
-            self.state.joint_position = self.data.qpos[7:19]
-            self.state.joint_velocity = self.data.qvel[6:18]
-            self.state.joint_torque=self.data.qfrc_actuator[6:18]
-            self.state.base_link_position = [self.data.qpos[0], self.data.qpos[1], self.data.qpos[2]]
-            self.state.base_link_linear_velocity = [self.data.qvel[0], self.data.qvel[1], self.data.qvel[2]]
-                # contact force
-        # self.contact_force = np.array(self.data.sensordata[22:26])
-        # # print("contact_force",self.contact_force)   
             
 
     def keyboard(self, window, key, scancode, act, mods):
@@ -248,8 +221,8 @@ class MujocoSimulator:
 
 if __name__ == '__main__':
     dirname = os.path.dirname(__file__)
-    abspath = os.path.join(dirname + "/model/ur5/ur5.xml")
-    model_xml = abspath
-    sim = MujocoSimulator(model_xml) 
+    xml_file = os.path.join(dirname + "/model/auboi20/aubo_i20.xml")
+    urdf_file = os.path.join(dirname + "/model/auboi20/aubo_i20.urdf")
+    sim = MujocoSimulator(xml_file,urdf_file) 
     sim.initSimulator()
     sim.runSimulation()
