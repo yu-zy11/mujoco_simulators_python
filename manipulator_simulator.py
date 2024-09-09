@@ -9,6 +9,7 @@ import threading
 from scipy.spatial.transform import Rotation as R
 from inverse_kinematics import pinocchio_kinematics as Kine
 from trajectory import trapezoid_planning, PlotPositionAndVelocity
+from numpy.linalg import norm
 # from ros_pub import RosPublisher
 # import rospy
 
@@ -31,27 +32,37 @@ class MujocoSimulator:
         self.qpos_cmd=[0]*6
         self.qvel_cmd=[0]*6
         self.kp=[500,1000,200,50,20,10]
-        self.kd=[50,200,20,20,20,10]
+        self.kd=[50,200,60,20,4,2]
         self.kine=Kine(urdf_file)
-        # parameters for trajectory
+        self.planner_thread = threading.Thread(target=self.RunPlanner)
+        
+        
+        #设置梯形速度规划笛卡尔空间的最大速度和加速度
         self.max_vel=1.0
         self.max_acc=2.0
-        
+        #设置目标点的位置
         self.pos_array=np.array([[-280,  336,   673, 673, 1739, 1739, 1739,  2674, 2674, 3403, 3628, 3628, 3628],
                                  [-221, -221,  -147,-147,-147, -147, -147,  -147, -147, -147, -388, -344, -344],
                                  [834.7 ,834.7, 700, 453, 807,  453,  117.6, 807,  658,  410,  1352, 954,  477]]).dot(0.001)
-        #set base position and orietation
-        self.base_pos = np.array([0, 0, -0.4])
+        #设置目标点的姿态
+        self.ori_des= np.array([[1,0,0],
+                                [0,0,1],
+                                [0,-1,0]])
+        self.qref_for_pos0=np.array([0,0,0,0,0,0]) #设置第一个目标点的参考关节角度
+        
+        #设置基座的位置和姿态
+        self.base_pos = np.array([0, -0.2, 0.0])
         self.base_ori=np.array([[1, 0, 0],
                                 [0, 1, 0],
                                 [0, 0, 1]])
+        self.step=0.002
+        
         
 
 
     def resetSim(self):
         # mj.mj_resetData(self.model, self.data)
-        if self.fix_base:
-            self.data.qpos = self.default_joint_pos.copy()
+        self.data.qpos = self.default_joint_pos.copy()
         mj.mj_forward(self.model, self.data)
         mj.mj_step(self.model, self.data)
 
@@ -85,7 +96,6 @@ class MujocoSimulator:
         self.cam.elevation = -45
         self.cam.distance = 3
         self.cam.lookat = np.array([0.0, 0.0, 0.5])
-        # print(self.data.qpos)
         self.data.qpos[0:6] = self.default_joint_pos.copy()
         
         # Init GLFW library, create window, make OpenGL context current, request v-sync
@@ -117,13 +127,45 @@ class MujocoSimulator:
         mj.mj_forward(self.model, self.data)
         #
 
-    def controller(self, model, data):
+    
+    def RunPlanner(self):
         if(self.first_run_mujoco_step):
-            self.data.qpos=self.qpos_cmd
+            cart_pos=self.base_ori.T@(self.pos_array[:,0]-self.base_pos) #第一个目标点
+            cart_vel=np.zeros(3)
+            omega_des=np.zeros(3)
+            self.qpos_cmd,self.qvel_cmd=self.kine.ikine(self.qref_for_pos0,cart_pos,self.ori_des,cart_vel,omega_des)
+            self.data.qpos=self.qpos_cmd.copy()
             mj.mj_forward(self.model, self.data)
+            mj.mj_step(self.model, self.data)
             self.first_run_mujoco_step = False
+        ##controller
+        itr=0
+        total_time=0
+        for i in range(4): # 第一批目标点0-3
+            while True:
+                start_pos=self.base_ori.T@(self.pos_array[:,i]-self.base_pos)
+                end_pos=self.base_ori.T@(self.pos_array[:,i+1]-self.base_pos)
+                t=itr*self.step
+                cart_pos,cart_vel,duration=trapezoid_planning(start_pos,end_pos,self.max_vel, self.max_acc, t)
+                qref=self.data.qpos
+                omega_des=np.zeros(3)
+                self.qpos_cmd,self.qvel_cmd=self.kine.ikine(qref,cart_pos,self.ori_des,cart_vel,omega_des)
+                current_pos,current_rotm=self.kine.fkine(self.data.qpos)
+                print("self.qpos_cmd",self.qpos_cmd)
+                print("self.qpos",self.data.qpos)
+                if abs(t-duration)<0.002:
+                # if norm(end_pos-current_pos)<0.001:
+                    itr=0
+                    break
+                itr+=1
+                total_time+=self.step
+        
+    def controller(self, model, data):
         for i in range(6):
             self.data.ctrl[i]=self.kp[i]*(self.qpos_cmd[i]-self.data.qpos[i])+self.kd[i]*(self.qvel_cmd[i]-self.data.qvel[i])
+
+            
+       
 
         
     def runSimulation(self):
@@ -133,10 +175,11 @@ class MujocoSimulator:
         glfw.set_mouse_button_callback(self.window, self.mouse_button)
         glfw.set_scroll_callback(self.window, self.mouse_scroll)
         mj.mj_forward(self.model, self.data)
+        # mj.set_mjcb_control(self.controller)
 
         # counter=0
         start_time=self.data.time
-        itr=0
+        self.planner_thread.start()
         while not glfw.window_should_close(self.window):
             # mj.mj_forward(self.model, self.data)
             time_prev = self.data.time
@@ -155,18 +198,9 @@ class MujocoSimulator:
         # process pending GUI events, call GLFW callbacks
             glfw.poll_events()
             while (self.data.time-time_prev < 1.0/60.0):
-                start_pos=self.base_ori.T@(self.pos_array[:,0]-self.base_pos)
-                end_pos=self.base_ori.T@(self.pos_array[:,1]-self.base_pos)
-                t=itr*0.002
-                cart_pos,cart_vel=trapezoid_planning(start_pos,end_pos,self.max_vel, self.max_acc, t)
-                qref=self.data.qpos
-                omega_des=np.zeros(3)
-                rotm=np.eye(3)
-                self.qpos_cmd,self.qvel_cmd=self.kine.ikine(qref,cart_pos,rotm,cart_vel,omega_des)
                 self.controller(self.model, self.data)
                 mj.mj_step(self.model, self.data)
-                time.sleep(0.002)
-        itr+=1
+                # time.sleep(0.002)
         glfw.terminate()
             
 

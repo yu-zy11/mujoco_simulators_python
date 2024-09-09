@@ -16,6 +16,7 @@ class pinocchio_kinematics:
         self.IT_MAX = 1000
         self.DT = 1e-1
         self.damp = 1e-12
+        self.max_error = 0.2
 
     ##################################
     # pos_des:cartesian position in world frame
@@ -40,6 +41,10 @@ class pinocchio_kinematics:
             if i >= self.IT_MAX:
                 success = False
                 break
+            # simpliest line search method to avoid overshoot
+            if norm(err)>self.max_error:
+                err = err/norm(err)*self.max_error
+            
             J = pinocchio.computeJointJacobian(self.model,self.data,q,self.joint_id)
             v = - J.T.dot(solve(J.dot(J.T) + self.damp * np.eye(6), err))
             q = pinocchio.integrate(self.model,q,v*self.DT)

@@ -5,7 +5,7 @@ def trapezoid_planning(start_pos,end_pos,max_vel, max_acc, time):
     ZERO=0.0000001
     dist = np.linalg.norm(start_pos - end_pos)
     if(dist < ZERO):
-        return end_pos, np.zeros(3)  #pos vel
+        return end_pos, np.zeros(3),0  #pos vel
     direction = (end_pos - start_pos) / dist
     key_time=max_vel/max_acc
     d1=0.5*max_acc*key_time**2
@@ -22,7 +22,8 @@ def trapezoid_planning(start_pos,end_pos,max_vel, max_acc, time):
         else:
             pos = end_pos
             vel = np.zeros(3)
-        return pos, vel
+        duration=t1+t2
+        return pos, vel,duration
     else:#有匀速区间
         t1 = max_vel / max_acc
         t3 = t1
@@ -39,7 +40,8 @@ def trapezoid_planning(start_pos,end_pos,max_vel, max_acc, time):
         else:
             pos = end_pos
             vel = np.zeros(3)
-        return pos, vel
+        duration=t1+t2+t3
+        return pos, vel,duration
 
 def PlotPositionAndVelocity(time_array,pos_array,vel_array):
     plt.subplot(3,2,1)
