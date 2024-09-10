@@ -31,6 +31,7 @@ class pinocchio_kinematics:
         #get target joint positions
         oMdes = pinocchio.SE3(rotm_des, pos_des) 
         i=0
+        jacobian=np.eye(6)
         while True:
             pinocchio.forwardKinematics(self.model,self.data,q)
             dMi = oMdes.actInv(self.data.oMi[self.joint_id])
@@ -51,12 +52,13 @@ class pinocchio_kinematics:
             # if not i % 10:
             #     print('%d: error = %s' % (i, err.T))
             i += 1
+            jacobian=J
         #ge target joint velocities
         rotm=self.data.oMi[self.joint_id].rotation
         vel_des_body=np.zeros(6)
         vel_des_body[0:3]=rotm.T@np.array([vel_des[0],vel_des[1],vel_des[2]])
         vel_des_body[3:6]=rotm.T@np.array([omega_des[0],omega_des[1],omega_des[2]])
-        dq=solve(J,vel_des_body)
+        dq=solve(jacobian,vel_des_body)
         return q,dq
     
     def fkine(self,qpos):
