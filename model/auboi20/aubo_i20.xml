@@ -38,7 +38,7 @@
 
   <worldbody>
     <geom type="mesh" rgba="1 1 1 1" mesh="link0" class="visual"/>
-    <body name="shoulder_Link" pos="0 0 0.1855" quat="0 0 0 1">
+    <body name="shoulder_Link" pos="0 0 0.1855" quat="1 0 0 0">
       <inertial pos="-2.839e-05 0.00362627 -0.0287715" quat="0.58109 -0.04903 0.0650076 0.809756" mass="15.9876" diaginertia="0.081353 0.0813027 0.0672485"/>
       <joint name="shoulder_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-6.28319 6.28319" damping="0.2" frictionloss="0.5"/>
       <geom type="mesh" rgba="1 1 1 1" mesh="link1" class="visual"/>

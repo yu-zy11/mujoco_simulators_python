@@ -7,7 +7,7 @@ import time
 import math
 import threading
 from scipy.spatial.transform import Rotation as R
-from inverse_kinematics import pinocchio_kinematics as Kine
+from inverse_kinematics import Kinematics as Kine
 from trajectory import trapezoid_planning, PlotPositionAndVelocity
 # from ros_pub import RosPublisher
 # import rospy
@@ -41,10 +41,14 @@ class MujocoSimulator:
                                  [-221, -221,  -147,-147,-147, -147, -147,  -147, -147, -147, -388, -344, -344],
                                  [834.7 ,834.7, 700, 453, 807,  453,  117.6, 807,  658,  410,  1352, 954,  477]]).dot(0.001)
         #set base position and orietation
-        self.base_pos = np.array([0, 0, -0.4])
+        self.base_pos = np.array([0.1, 0, 0.4])
         self.base_ori=np.array([[1, 0, 0],
                                 [0, 1, 0],
                                 [0, 0, 1]])
+        self.qpos_upper_limit = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0]).dot(3.1415926)
+        self.qpos_lower_limit = np.array([-1.0, -1.0, -1.0, -1.0, -1.0, -1.0]).dot(3.1415926)
+        self.finished=False
+
         
 
 
@@ -137,12 +141,13 @@ class MujocoSimulator:
         # counter=0
         start_time=self.data.time
         itr=0
+        line_number=0
         while not glfw.window_should_close(self.window):
             # mj.mj_forward(self.model, self.data)
             time_prev = self.data.time
             viewport_width, viewport_height = glfw.get_framebuffer_size(self.window)
             viewport = mj.MjrRect(0, 0, viewport_width, viewport_height)
-        # Update scene and render
+            # Update scene and render
             self.cam.lookat = np.array([0, 0, 0.8])
             self.cam.distance = 3
             self.opt.flags[14] = 1  # show contact area
@@ -150,23 +155,42 @@ class MujocoSimulator:
             mj.mjv_updateScene(self.model, self.data, self.opt, None,
                                self.cam, mj.mjtCatBit.mjCAT_ALL.value, self.scene)
             mj.mjr_render(viewport, self.scene, self.context)
-        # swap OpenGL buffers (blocking call due to v-sync)
+            # swap OpenGL buffers (blocking call due to v-sync)
             glfw.swap_buffers(self.window)
-        # process pending GUI events, call GLFW callbacks
+            # process pending GUI events, call GLFW callbacks
             glfw.poll_events()
+
             while (self.data.time-time_prev < 1.0/60.0):
-                start_pos=self.base_ori.T@(self.pos_array[:,0]-self.base_pos)
-                end_pos=self.base_ori.T@(self.pos_array[:,1]-self.base_pos)
+                if(line_number>=self.pos_array.shape[1]-8):
+                    line_number=self.pos_array.shape[1]-8
+                    self.finished=True
+                start_pos=self.base_ori.T@(self.pos_array[:,line_number]-self.base_pos)
+                end_pos=self.base_ori.T@(self.pos_array[:,line_number+1]-self.base_pos)
+                if(line_number%2==0):
+                    start_pos=self.base_ori.T@(self.pos_array[:,0]-self.base_pos)
+                    end_pos=self.base_ori.T@(self.pos_array[:,1]-self.base_pos)
+                else:
+                    start_pos=self.base_ori.T@(self.pos_array[:,1]-self.base_pos)
+                    end_pos=self.base_ori.T@(self.pos_array[:,0]-self.base_pos)
                 t=itr*0.002
                 cart_pos,cart_vel=trapezoid_planning(start_pos,end_pos,self.max_vel, self.max_acc, t)
+                if(np.linalg.norm(cart_pos-end_pos)<1e-6 and not self.finished):
+                    line_number+=1
+                    itr=0
+
+                # print("line_number",line_number)
+                # print("cart_pos-end_pos",cart_pos-end_pos)
+
                 qref=self.data.qpos
                 omega_des=np.zeros(3)
                 rotm=np.eye(3)
-                self.qpos_cmd,self.qvel_cmd=self.kine.ikine(qref,cart_pos,rotm,cart_vel,omega_des)
+                self.qpos_cmd,self.qvel_cmd=self.kine.ikine(qref,cart_pos,rotm,cart_vel,omega_des,self.qpos_upper_limit,self.qpos_lower_limit)
                 self.controller(self.model, self.data)
                 mj.mj_step(self.model, self.data)
                 time.sleep(0.002)
-        itr+=1
+            # if not itr % 1000:
+            #     print(self.qpos_cmd,self.qvel_cmd)
+                itr+=1
         glfw.terminate()
             
 
